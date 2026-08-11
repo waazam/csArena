@@ -44,6 +44,7 @@ func _physics_process(delta: float) -> void:
 			var nrm: Vector2 = hit.get("normal", -dir)
 			g.fx.impact(hit.position, nrm, color)
 			g.gore.add_splat(hit.position, randf_range(2.0, 3.0), Color(0.07, 0.07, 0.10, 0.6))
+		Sfx.play_at("hit_wall", hit.position, -12.0, 0.2)
 	queue_free()
 
 func _valid_target(col: Object) -> bool:

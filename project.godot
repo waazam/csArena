@@ -22,6 +22,7 @@ config/icon="res://icon.svg"
 [autoload]
 
 Net="*res://scripts/net.gd"
+Sfx="*res://scripts/sfx.gd"
 
 [display]
 

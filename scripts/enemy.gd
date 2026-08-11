@@ -109,6 +109,7 @@ func _physics_process(delta: float) -> void:
 	if shots_left <= 0:
 		shots_left = data.mag
 		cooldown = data.reload * 1.5
+		Sfx.play_at("reload_start", global_position, -14.0)
 
 func _fire(data: Dictionary) -> void:
 	shots_left -= 1
@@ -123,6 +124,7 @@ func _fire(data: Dictionary) -> void:
 		var a: float = aim_angle + deg_to_rad(randf_range(-wobble, wobble))
 		g.spawn_bullet(muzzle, a, weapon_id, self, "enemy", damage_scale)
 	g.fx.eject_shell(global_position, aim_angle, weapon_id)
+	Sfx.play_at("shot_" + weapon_id, global_position, -2.0)
 
 func _has_los(p) -> bool:
 	var params := PhysicsRayQueryParameters2D.create(
@@ -135,7 +137,9 @@ func receive_hit(dmg: int, _attacker_peer: int, dir: Vector2) -> void:
 	var g = _game()
 	if g:
 		g.gore.add_spray(global_position + dir * 6.0, dir)
+	Sfx.play_at("hit_flesh", global_position, -8.0)
 	if hp <= 0:
+		Sfx.play_at("death", global_position, -6.0)
 		if g:
 			g.gore.add_corpse(global_position, body_color)
 			g.fx.death_burst(global_position, body_color)

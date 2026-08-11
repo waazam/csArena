@@ -343,6 +343,7 @@ func _pve_tick(delta: float) -> void:
 		if p and p.alive:
 			p.rpc("net_heal", 25)
 		hud.flash_message("WAVE %d CLEARED  +%d" % [wave, wave * 100])
+		Sfx.play("wave_clear", -6.0, 0.0)
 		wave_break = 3.0
 
 func _begin_wave() -> void:
@@ -350,6 +351,7 @@ func _begin_wave() -> void:
 	enemies_to_spawn = mini(3 + wave * 2, 26)
 	spawn_timer = 0.0
 	hud.flash_message("WAVE %d" % wave)
+	Sfx.play("wave_start", -6.0, 0.0)
 
 func _wave_weapons() -> Array:
 	if wave <= 1:
@@ -398,6 +400,7 @@ func on_enemy_died(e) -> void:
 
 func _pve_game_over() -> void:
 	running = false
+	Sfx.play("game_over", -4.0, 0.0)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	hud.show_overlay("YOU DIED",
 			"score %d — reached wave %d" % [score, wave], "RETRY")
@@ -435,21 +438,31 @@ func _on_peer_disconnected(pid: int) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func net_set_scores(d: Dictionary) -> void:
+	# Frag confirm for the local killer (read-only compare, no state change).
+	var me := multiplayer.get_unique_id()
+	if int(d.get(me, 0)) > int(kills.get(me, 0)):
+		Sfx.play("frag", -4.0)
 	kills = d
 
 @rpc("any_peer", "call_local", "reliable")
 func net_announce(text: String) -> void:
 	hud.flash_message(text)
+	Sfx.play("announce", -10.0)
 
 @rpc("any_peer", "call_local", "reliable")
 func net_end_match(winner: int) -> void:
 	match_over = true
 	hud.flash_message("PLAYER %d WINS THE MATCH" % winner, 4.5)
+	if winner == multiplayer.get_unique_id():
+		Sfx.play("win", -4.0, 0.0)
+	else:
+		Sfx.play("game_over", -6.0, 0.0)
 
 @rpc("any_peer", "call_local", "reliable")
 func net_reset_match() -> void:
 	match_over = false
 	hud.flash_message("NEW ROUND — FIRST TO %d" % KILL_LIMIT)
+	Sfx.play("wave_start", -8.0, 0.0)
 
 func _reset_match() -> void:
 	if not is_instance_valid(self) or not multiplayer.is_server():

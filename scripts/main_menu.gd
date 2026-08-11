@@ -139,6 +139,8 @@ func _button(text: String, cb: Callable) -> Button:
 	b.add_theme_stylebox_override("focus", hover.duplicate())
 	b.add_theme_color_override("font_color", Color(0.9, 0.97, 1.0))
 	b.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	b.mouse_entered.connect(func() -> void: Sfx.play("ui_hover", -14.0))
+	b.pressed.connect(func() -> void: Sfx.play("ui_click", -8.0))
 	b.pressed.connect(cb)
 	return b
 

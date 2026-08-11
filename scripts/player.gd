@@ -34,6 +34,8 @@ var stride := 0.0        # 0..1 smoothed "how fast am I moving"
 var display_aim := 0.0   # smoothed aim used only for drawing remote players
 var prev_pos := Vector2.ZERO
 var light: PointLight2D
+var last_dry := 0       # msec of last dry-fire click (rate limit, cosmetic)
+var last_step := 0      # walk-cycle step index for footstep sounds (cosmetic)
 
 func _ready() -> void:
 	motion_mode = CharacterBody2D.MOTION_MODE_FLOATING
@@ -96,6 +98,12 @@ func _physics_process(delta: float) -> void:
 	stride = lerpf(stride, clampf((moved / maxf(delta, 0.0001)) / SPEED, 0.0, 1.0),
 			minf(1.0, delta * 10.0))
 	walk_phase += moved * 0.05
+	# Quiet footsteps for the local player only, on each half-stride.
+	if cam and alive and stride > 0.4:
+		var step_i := int(walk_phase / PI)
+		if step_i != last_step:
+			last_step = step_i
+			Sfx.play("footstep", -20.0, 0.15)
 	if light:
 		light.energy = (1.05 + flash * 9.0) * (1.0 if alive else 0.35)
 	queue_redraw()
@@ -132,6 +140,9 @@ func _handle_trigger() -> void:
 	var want: bool = pressed if data.auto else (pressed and not trigger_prev)
 	if want and cooldown <= 0.0 and not reloading:
 		if mag <= 0:
+			if Time.get_ticks_msec() - last_dry > 250:
+				last_dry = Time.get_ticks_msec()
+				Sfx.play("dry", -8.0)
 			start_reload()
 		else:
 			_fire(data)
@@ -158,6 +169,8 @@ func _spawn_shots(angles: PackedFloat32Array) -> void:
 	for a in angles:
 		g.spawn_bullet(muzzle, a, weapon_id, self, "player", 1.0)
 	g.fx.eject_shell(global_position, aim_angle, weapon_id)
+	# Runs on every peer (local fire + net_shoot), so shots are audible for all.
+	Sfx.play_at("shot_" + weapon_id, global_position)
 
 func start_reload() -> void:
 	var data: Dictionary = Weapons.DATA[weapon_id]
@@ -165,6 +178,7 @@ func start_reload() -> void:
 		return
 	reloading = true
 	reload_left = data.reload
+	Sfx.play("reload_start", -8.0)
 
 func _finish_reload() -> void:
 	reloading = false
@@ -172,6 +186,7 @@ func _finish_reload() -> void:
 	var take: int = mini(data.mag - mag, reserve)
 	mag += take
 	reserve -= take
+	Sfx.play("reload_end", -8.0)
 
 func give_weapon(id: String) -> void:
 	var data: Dictionary = Weapons.DATA[id]
@@ -213,9 +228,12 @@ func net_health_fx(new_hp: int, splat_pos: Vector2) -> void:
 	if g:
 		g.gore.add_spray(global_position, splat_pos - global_position)
 	if cam:
+		Sfx.play("hit_flesh", -2.0)  # heavier when it's you
 		shake += 3.0
 		if g:
 			g.hud.hit_flash(0.5)
+	else:
+		Sfx.play_at("hit_flesh", global_position, -6.0)
 
 @rpc("any_peer", "call_local", "reliable")
 func net_die(_attacker_peer: int) -> void:
@@ -227,6 +245,7 @@ func net_die(_attacker_peer: int) -> void:
 	set_deferred("collision_layer", 0)
 	set_deferred("collision_mask", 1)
 	var g = _game()
+	Sfx.play_at("death", global_position, -2.0)
 	if g:
 		g.gore.add_corpse(global_position, COLORS[color_index % COLORS.size()])
 		g.fx.death_burst(global_position, COLORS[color_index % COLORS.size()])
@@ -249,10 +268,12 @@ func net_respawn(pos: Vector2) -> void:
 @rpc("any_peer", "call_local", "reliable")
 func net_give_weapon(id: String) -> void:
 	give_weapon(id)
+	Sfx.play_at("pickup_weapon", global_position, -6.0)
 
 @rpc("any_peer", "call_local", "reliable")
 func net_heal(amount: int) -> void:
 	hp = mini(MAX_HP, hp + amount)
+	Sfx.play_at("pickup_health", global_position, -6.0)
 
 func _make_light_tex() -> GradientTexture2D:
 	var grad := Gradient.new()
