@@ -157,6 +157,9 @@ func _on_play() -> void:
 	Net.start_pve()
 
 func _on_multiplayer() -> void:
+	if OS.has_feature("web"):
+		status_label.text = "PvP needs the desktop version — browsers can't do UDP networking"
+		return
 	main_box.visible = false
 	mp_box.visible = true
 	status_label.text = ""
