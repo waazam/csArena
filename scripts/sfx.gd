@@ -135,44 +135,229 @@ func _layer_pad(b: PackedFloat32Array, freq: float, amp: float) -> void:
 		phase += TAU * freq / RATE
 		b[i] += sin(phase) * amp * sin(PI * k)
 
-func _to_wav(b: PackedFloat32Array) -> AudioStreamWAV:
+func _to_wav(b: PackedFloat32Array, rate := RATE) -> AudioStreamWAV:
 	var bytes := PackedByteArray()
 	bytes.resize(b.size() * 2)
 	for i in b.size():
 		bytes.encode_s16(i * 2, int(clampf(b[i], -1.0, 1.0) * 32767.0))
 	var wav := AudioStreamWAV.new()
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
-	wav.mix_rate = RATE
+	wav.mix_rate = rate
 	wav.stereo = false
 	wav.data = bytes
 	return wav
 
-## Generic gunshot: bright noise crack + descending sine body (+ optional
-## low thump for heavy guns).
-func _gun(dur: float, crack_amp: float, crack_decay: float, crack_fc: float,
-		f0: float, f1: float, body_amp: float, body_decay: float,
-		thump_amp := 0.0, thump_f := 75.0, thump_decay := 12.0) -> AudioStreamWAV:
-	var b := _buf(dur)
-	_layer_noise(b, crack_amp, crack_decay, crack_fc)
-	_layer_sweep(b, f0, f1, body_amp, body_decay)
-	if thump_amp > 0.0:
-		_layer_tone(b, thump_f, thump_amp, thump_decay, 0.0, dur, 0.002)
-	return _to_wav(b)
+# ------------------------------------------------- gunshot synthesis (44.1k)
+# Physically-informed layering. Real gunshot anatomy, all layers summed then
+# tanh-saturated: (1) muzzle blast = hard-clipped broadband impulse with ZERO
+# attack, (2) fast-decaying high-frequency crack, (3) bandpassed low-mid body
+# punch, (4) low sine sub for heavy guns, (5) reverb-like tail that grows
+# progressively duller (time-varying lowpass = air absorption) plus a few
+# delayed lowpassed echo taps faking environment reflections.
+
+const SHOT_RATE := 44100
+const ECHO_TAPS := [
+	[0.055, 0.42, 2600.0], [0.100, 0.26, 1800.0],
+	[0.160, 0.17, 1300.0], [0.235, 0.11, 950.0],
+]
+const ENV_CUT := 0.0005  # stop writing a layer once its envelope is inaudible
+
+## (1) Muzzle blast: ~4 ms of full-scale hard-clipped noise starting at
+## sample 0 — no attack ramp whatsoever.
+func _shot_blast(b: PackedFloat32Array, rate: int, amp: float) -> void:
+	var n := mini(int(0.004 * rate), b.size())
+	var env := amp
+	var dm := exp(-700.0 / rate)
+	for i in n:
+		b[i] += clampf(_rng.randf_range(-3.0, 3.0), -1.0, 1.0) * env
+		env *= dm
+
+## (2)/(3) Bandpassed noise (lowpass minus lowpass) with exponential decay.
+## Used for the crack (2–10 kHz), body punch (80–420 Hz) and suppressor chuff.
+func _shot_band(b: PackedFloat32Array, rate: int, amp: float, decay: float,
+		f_lo: float, f_hi: float) -> void:
+	var a_hi := 1.0 - exp(-TAU * f_hi / rate)
+	var a_lo := 1.0 - exp(-TAU * f_lo / rate)
+	var y_hi := 0.0
+	var y_lo := 0.0
+	var env := amp
+	var dm := exp(-decay / rate)
+	for i in b.size():
+		var x := _rng.randf_range(-1.0, 1.0) * env
+		y_hi += a_hi * (x - y_hi)
+		y_lo += a_lo * (x - y_lo)
+		b[i] += y_hi - y_lo
+		env *= dm
+		if env < ENV_CUT:
+			break
+
+## (4) Low sine sub (50–90 Hz) under rifles/shotgun/sniper.
+func _shot_sub(b: PackedFloat32Array, rate: int, amp: float, freq: float,
+		decay: float) -> void:
+	var phase := 0.0
+	var w := TAU * freq / rate
+	var env := amp
+	var dm := exp(-decay / rate)
+	for i in b.size():
+		phase += w
+		b[i] += sin(phase) * env
+		env *= dm
+		if env < ENV_CUT:
+			break
+
+## Short mechanical action tick (bolt/slide) for suppressed weapons.
+func _shot_click(b: PackedFloat32Array, rate: int, start: float, amp: float,
+		fc: float) -> void:
+	var a := 1.0 - exp(-TAU * fc / rate)
+	var y := 0.0
+	var i0 := int(start * rate)
+	var n := mini(int(0.006 * rate), b.size() - i0)
+	var env := amp
+	var dm := exp(-500.0 / rate)
+	for i in n:
+		y += a * (_rng.randf_range(-1.0, 1.0) * env - y)
+		env *= dm
+		b[i0 + i] += y
+
+## (5a) Reverb-like noise tail that gets progressively duller: the one-pole
+## lowpass cutoff glides from fc0 to fc1 across the tail (air absorption).
+func _shot_tail(b: PackedFloat32Array, rate: int, amp: float, decay: float,
+		fc0 := 6000.0, fc1 := 1000.0, start := 0.015) -> void:
+	var i0 := int(start * rate)
+	var n := b.size() - i0
+	if n <= 0:
+		return
+	var y := 0.0
+	var env := amp
+	var dm := exp(-decay / rate)
+	var a := 1.0 - exp(-TAU * fc0 / rate)
+	for i in n:
+		if i % 64 == 0:  # refresh the gliding cutoff coefficient in blocks
+			a = 1.0 - exp(-TAU * lerpf(fc0, fc1, float(i) / n) / rate)
+		y += a * (_rng.randf_range(-1.0, 1.0) * env - y)
+		b[i0 + i] += y
+		env *= dm
+		if env < ENV_CUT:
+			break
+
+## (5b) Discrete echo taps: delayed, attenuated, lowpassed copies of the
+## first ~120 ms, with slight random jitter on the delays.
+func _shot_echoes(b: PackedFloat32Array, rate: int, count: int) -> void:
+	if count <= 0:
+		return
+	var src_n := mini(int(0.12 * rate), b.size())
+	var src := b.slice(0, src_n)
+	for ti in mini(count, ECHO_TAPS.size()):
+		var tap: Array = ECHO_TAPS[ti]
+		var d := int(float(tap[0]) * _rng.randf_range(0.85, 1.15) * rate)
+		var g: float = tap[1]
+		var a := 1.0 - exp(-TAU * float(tap[2]) / rate)
+		var y := 0.0
+		for i in src_n:
+			var j := d + i
+			if j >= b.size():
+				break
+			y += a * (src[i] - y)
+			b[j] += y * g
+
+## Sum -> tanh soft-clip (perceived "bang" comes from saturation density,
+## not peak level) -> normalize just under full scale.
+func _shot_finish(b: PackedFloat32Array, drive: float, norm: float) -> void:
+	var peak := 0.0
+	for i in b.size():
+		var v := tanh(b[i] * drive)
+		b[i] = v
+		peak = maxf(peak, absf(v))
+	if peak > 0.0001:
+		var g := norm / peak
+		for i in b.size():
+			b[i] *= g
+
+func _make_shot(cfg: Dictionary) -> AudioStreamWAV:
+	var b := PackedFloat32Array()
+	b.resize(int(float(cfg.dur) * SHOT_RATE))
+	if float(cfg.get("blast", 0.0)) > 0.0:
+		_shot_blast(b, SHOT_RATE, cfg.blast)
+	var cr: Array = cfg.get("crack", [])
+	if not cr.is_empty():
+		_shot_band(b, SHOT_RATE, cr[0], cr[1], cr[2], cr[3])
+	var ch: Array = cfg.get("chuff", [])
+	if not ch.is_empty():
+		_shot_band(b, SHOT_RATE, ch[0], ch[1], ch[2], ch[3])
+	var bd: Array = cfg.get("body", [])
+	if not bd.is_empty():
+		_shot_band(b, SHOT_RATE, bd[0], bd[1], bd[2], bd[3])
+	var sb: Array = cfg.get("sub", [])
+	if not sb.is_empty():
+		_shot_sub(b, SHOT_RATE, sb[0], sb[1], sb[2])
+	for c in cfg.get("clicks", []):
+		_shot_click(b, SHOT_RATE, c[0], c[1], c[2])
+	var tl: Array = cfg.get("tail", [])
+	if not tl.is_empty():
+		_shot_tail(b, SHOT_RATE, tl[0], tl[1])
+	_shot_echoes(b, SHOT_RATE, int(cfg.get("echoes", 0)))
+	_shot_finish(b, float(cfg.get("drive", 3.0)), float(cfg.get("norm", 0.9)))
+	return _to_wav(b, SHOT_RATE)
 
 func _generate_all() -> void:
-	# --- gunshots (one per weapon family, aliased per weapon id) ---
-	sounds["shot_glock"] = _gun(0.16, 0.85, 45.0, 4500.0, 300.0, 110.0, 0.50, 25.0)
-	sounds["shot_usp"] = _gun(0.14, 0.60, 55.0, 2200.0, 260.0, 100.0, 0.45, 30.0)   # suppressed: duller
-	sounds["shot_mp5"] = _gun(0.10, 0.55, 70.0, 2600.0, 240.0, 110.0, 0.35, 40.0)   # light fast tick
-	sounds["shot_m4a4"] = _gun(0.25, 0.90, 35.0, 5000.0, 260.0, 90.0, 0.60, 18.0, 0.35, 85.0)
-	sounds["shot_ak47"] = _gun(0.28, 1.00, 30.0, 4200.0, 230.0, 80.0, 0.65, 15.0, 0.42, 75.0)
-	sounds["shot_nova"] = _gun(0.50, 0.80, 25.0, 1500.0, 150.0, 55.0, 0.80, 8.0, 0.50, 55.0, 6.0)
-	var awp := _buf(0.75)
-	_layer_noise(awp, 1.0, 40.0, 6000.0)          # sharp crack
-	_layer_noise(awp, 0.45, 6.0, 900.0)           # long rumble tail
-	_layer_sweep(awp, 200.0, 60.0, 0.70, 7.0)     # deep body
-	_layer_tone(awp, 55.0, 0.35, 5.0, 0.0, 0.75, 0.002)
-	sounds["shot_awp"] = _to_wav(awp)
+	# --- gunshots: physically-informed model @ 44.1 kHz (see helpers above).
+	sounds["shot_glock"] = _make_shot({
+		dur = 0.40, blast = 1.0,
+		crack = [1.00, 40.0, 2000.0, 8000.0],
+		body = [0.70, 14.0, 120.0, 420.0],
+		tail = [0.30, 12.0],
+		echoes = 2, drive = 3.0, norm = 0.85,
+	})
+	sounds["shot_usp"] = _make_shot({  # suppressed: chuff + action, no crack
+		dur = 0.35, blast = 0.25,
+		crack = [0.15, 60.0, 2000.0, 6000.0],
+		chuff = [0.70, 28.0, 250.0, 1100.0],
+		body = [0.45, 16.0, 100.0, 350.0],
+		clicks = [[0.0, 0.35, 4000.0], [0.045, 0.30, 3000.0]],
+		tail = [0.15, 15.0],
+		echoes = 1, drive = 2.0, norm = 0.72,
+	})
+	sounds["shot_mp5"] = _make_shot({  # suppressed, kept tight for rapid fire
+		dur = 0.30, blast = 0.20,
+		crack = [0.12, 70.0, 2500.0, 7000.0],
+		chuff = [0.65, 35.0, 300.0, 1300.0],
+		body = [0.35, 22.0, 120.0, 400.0],
+		clicks = [[0.0, 0.30, 4500.0], [0.035, 0.28, 3200.0]],
+		tail = [0.10, 20.0],
+		echoes = 0, drive = 2.0, norm = 0.68,
+	})
+	sounds["shot_m4a4"] = _make_shot({
+		dur = 0.65, blast = 1.0,
+		crack = [1.00, 35.0, 2500.0, 9000.0],
+		body = [0.80, 11.0, 110.0, 420.0],
+		sub = [0.50, 70.0, 9.0],
+		tail = [0.40, 7.0],
+		echoes = 3, drive = 3.5, norm = 0.92,
+	})
+	sounds["shot_ak47"] = _make_shot({  # slightly lower/duller than the M4
+		dur = 0.70, blast = 1.0,
+		crack = [0.95, 32.0, 1800.0, 7000.0],
+		body = [0.90, 10.0, 100.0, 380.0],
+		sub = [0.55, 62.0, 8.0],
+		tail = [0.45, 6.5],
+		echoes = 3, drive = 3.5, norm = 0.94,
+	})
+	sounds["shot_nova"] = _make_shot({  # massive slow low end
+		dur = 0.90, blast = 1.0,
+		crack = [0.70, 30.0, 1500.0, 5000.0],
+		body = [1.00, 6.0, 80.0, 300.0],
+		sub = [0.70, 55.0, 5.0],
+		tail = [0.50, 5.0],
+		echoes = 3, drive = 4.0, norm = 0.97,
+	})
+	sounds["shot_awp"] = _make_shot({  # everything maxed, longest tail
+		dur = 1.30, blast = 1.2,
+		crack = [1.10, 30.0, 2000.0, 10000.0],
+		body = [0.90, 8.0, 90.0, 350.0],
+		sub = [0.80, 50.0, 4.5],
+		tail = [0.55, 3.6],
+		echoes = 4, drive = 4.0, norm = 0.98,
+	})
 
 	# --- mechanics ---
 	var dry := _buf(0.05)
