@@ -18,6 +18,11 @@ var strafe_timer := 0.0
 var flash := 0.0
 var hurt := 0.0
 var body_color := Color(0.95, 0.3, 0.35)
+# --- cosmetic-only state ---
+var walk_phase := 0.0
+var stride := 0.0
+var display_aim := 0.0  # smoothed aim for drawing; aim_angle stays exact for firing
+var prev_pos := Vector2.ZERO
 
 func setup(w: String, hp_v: int, spd: float) -> void:
 	weapon_id = w
@@ -38,6 +43,8 @@ func _ready() -> void:
 	add_child(cs)
 	cooldown = randf_range(0.6, 1.3)
 	aim_angle = randf() * TAU
+	display_aim = aim_angle
+	prev_pos = global_position
 	body_color = Color(0.95, randf_range(0.22, 0.38), randf_range(0.28, 0.44))
 
 func _game():
@@ -47,6 +54,13 @@ func _physics_process(delta: float) -> void:
 	flash = maxf(0.0, flash - delta)
 	hurt = maxf(0.0, hurt - delta * 4.0)
 	cooldown -= delta
+	# Cosmetic walk-cycle + aim smoothing (firing still uses raw aim_angle).
+	var moved := (global_position - prev_pos).length()
+	prev_pos = global_position
+	stride = lerpf(stride, clampf((moved / maxf(delta, 0.0001)) / 220.0, 0.0, 1.0),
+			minf(1.0, delta * 10.0))
+	walk_phase += moved * 0.05
+	display_aim = lerp_angle(display_aim, aim_angle, minf(1.0, delta * 12.0))
 	queue_redraw()
 	var g = _game()
 	if g == null or not g.can_play():
@@ -108,6 +122,7 @@ func _fire(data: Dictionary) -> void:
 		var wobble: float = data.spread * 2.5 + 1.5
 		var a: float = aim_angle + deg_to_rad(randf_range(-wobble, wobble))
 		g.spawn_bullet(muzzle, a, weapon_id, self, "enemy", damage_scale)
+	g.fx.eject_shell(global_position, aim_angle, weapon_id)
 
 func _has_los(p) -> bool:
 	var params := PhysicsRayQueryParameters2D.create(
@@ -119,14 +134,15 @@ func receive_hit(dmg: int, _attacker_peer: int, dir: Vector2) -> void:
 	hurt = 1.0
 	var g = _game()
 	if g:
-		g.gore.add_splat(global_position + dir * 6.0, randf_range(3.0, 7.0),
-				Color(0.5, 0.06, 0.09, 0.85))
+		g.gore.add_spray(global_position + dir * 6.0, dir)
 	if hp <= 0:
 		if g:
 			g.gore.add_corpse(global_position, body_color)
+			g.fx.death_burst(global_position, body_color)
 			g.on_enemy_died(self)
 		queue_free()
 
 func _draw() -> void:
 	var col := body_color.lerp(Color.WHITE, hurt * 0.6)
-	StickRender.draw_stick(self, aim_angle, weapon_id, col, flash, false, hp, max_hp, "")
+	StickRender.draw_stick(self, display_aim, weapon_id, col, flash, false, hp, max_hp, "",
+			walk_phase, stride, false, -1.0)

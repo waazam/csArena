@@ -12,6 +12,7 @@ var source_group := "player"  # "player" or "enemy"
 var life := 1.3
 var can_damage := true
 var color := Color(1.0, 0.85, 0.4)
+var trail: Array[Vector2] = []  # recent global positions, newest first (cosmetic)
 
 func _ready() -> void:
 	can_damage = multiplayer.is_server()
@@ -23,6 +24,10 @@ func _physics_process(delta: float) -> void:
 	if life <= 0.0:
 		queue_free()
 		return
+	trail.push_front(global_position)
+	if trail.size() > 7:
+		trail.resize(7)
+	queue_redraw()
 	var step := dir * speed * delta
 	var params := PhysicsRayQueryParameters2D.create(
 			global_position, global_position + step, 1 | 2 | 4, [shooter_rid])
@@ -36,7 +41,9 @@ func _physics_process(delta: float) -> void:
 	if col is StaticBody2D:
 		var g = get_tree().get_first_node_in_group("game")
 		if g:
-			g.gore.add_splat(hit.position, randf_range(2.0, 3.5), Color(0.55, 0.5, 0.6, 0.7))
+			var nrm: Vector2 = hit.get("normal", -dir)
+			g.fx.impact(hit.position, nrm, color)
+			g.gore.add_splat(hit.position, randf_range(2.0, 3.0), Color(0.07, 0.07, 0.10, 0.6))
 	queue_free()
 
 func _valid_target(col: Object) -> bool:
@@ -46,5 +53,13 @@ func _valid_target(col: Object) -> bool:
 	return true
 
 func _draw() -> void:
-	draw_line(Vector2(-10, 0), Vector2(2, 0), color, 2.5)
-	draw_circle(Vector2(2, 0), 1.6, color)
+	# Fading trail behind the round (drawn in local space).
+	for i in range(trail.size() - 1):
+		var a := 0.45 * (1.0 - float(i) / 6.0)
+		draw_line(to_local(trail[i]), to_local(trail[i + 1]),
+				Color(color.r, color.g, color.b, a), maxf(1.0, 2.4 - i * 0.3))
+	# Glow + hot core.
+	draw_circle(Vector2(2, 0), 4.0, Color(color.r, color.g, color.b, 0.22))
+	draw_line(Vector2(-10, 0), Vector2(2, 0), Color(color.r, color.g, color.b, 0.85), 2.5)
+	draw_line(Vector2(-6, 0), Vector2(2, 0), color.lightened(0.45), 1.4)
+	draw_circle(Vector2(2, 0), 1.7, Color(1.0, 1.0, 0.9))

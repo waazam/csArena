@@ -7,15 +7,26 @@ const EnemyScript := preload("res://scripts/enemy.gd")
 const BulletScript := preload("res://scripts/bullet.gd")
 const PickupScript := preload("res://scripts/pickup.gd")
 const HudScript := preload("res://scripts/hud.gd")
+const FxScript := preload("res://scripts/fx.gd")
 
 const ARENA := Rect2(0, 0, 2400, 1600)
 const KILL_LIMIT := 15
 const MAX_ALIVE_ENEMIES := 10
 
-const FLOOR_COLOR := Color(0.12, 0.11, 0.15)
-const GRID_COLOR := Color(0.155, 0.145, 0.195)
-const WALL_COLOR := Color(0.24, 0.22, 0.30)
-const WALL_EDGE := Color(0.45, 0.40, 0.60)
+const FLOOR_COLOR := Color(0.065, 0.06, 0.105)
+const GRID_COLOR := Color(0.40, 0.45, 0.70, 0.06)
+const WALL_COLOR := Color(0.17, 0.16, 0.24)
+const WALL_EDGE := Color(0.55, 0.50, 0.80, 0.8)
+const AMBIENT := Color(0.76, 0.76, 0.88)
+
+## Cosmetic per-room floor tints (neon-noir zoning). Deterministic, static.
+const ZONES := [
+	[Rect2(40, 40, 780, 580), Color(0.20, 0.75, 1.00, 0.045)],   # NW — cyan
+	[Rect2(1580, 40, 780, 580), Color(1.00, 0.30, 0.75, 0.040)], # NE — magenta
+	[Rect2(40, 980, 780, 580), Color(1.00, 0.70, 0.25, 0.038)],  # SW — amber
+	[Rect2(1580, 980, 780, 580), Color(0.55, 0.40, 1.00, 0.050)],# SE — violet
+	[Rect2(1000, 620, 400, 360), Color(0.30, 1.00, 0.60, 0.040)],# center — green
+]
 
 const WALLS: Array[Rect2] = [
 	# Border.
@@ -59,6 +70,7 @@ var kills := {}  # PvP: peer_id -> frags
 
 var walls_node: Node2D
 var gore: Gore
+var fx  # FxLayer (scripts/fx.gd) — cosmetic sparks / shells / rings
 var pickups: Node2D
 var actors: Node2D
 var bullets: Node2D
@@ -70,6 +82,9 @@ func _ready() -> void:
 	_build_world()
 	gore = Gore.new()
 	add_child(gore)
+	fx = FxScript.new()
+	fx.name = "Fx"
+	add_child(fx)
 	pickups = Node2D.new()
 	pickups.name = "Pickups"
 	add_child(pickups)
@@ -113,6 +128,10 @@ func _unhandled_input(event: InputEvent) -> void:
 # ---------------------------------------------------------------- world
 
 func _build_world() -> void:
+	# Subtle ambient darkening; the local player carries a PointLight2D.
+	var cm := CanvasModulate.new()
+	cm.color = AMBIENT
+	add_child(cm)
 	walls_node = Node2D.new()
 	walls_node.name = "Walls"
 	add_child(walls_node)
@@ -126,10 +145,49 @@ func _build_world() -> void:
 		sh.size = r.size
 		cs.shape = sh
 		body.add_child(cs)
+		# Light occluder so the player's light throws wall shadows.
+		var occ := LightOccluder2D.new()
+		var poly := OccluderPolygon2D.new()
+		var hx := r.size.x / 2.0
+		var hy := r.size.y / 2.0
+		poly.polygon = PackedVector2Array([
+			Vector2(-hx, -hy), Vector2(hx, -hy), Vector2(hx, hy), Vector2(-hx, hy)])
+		occ.occluder = poly
+		body.add_child(occ)
 		walls_node.add_child(body)
 
+## Deterministic 2D hash -> [0,1]. Same on every peer (pure function of ints),
+## so cosmetic floor variation can never diverge between clients.
+func _hash01(ix: int, iy: int) -> float:
+	var h := ix * 374761393 + iy * 668265263 + 1442695040888963407
+	h = (h ^ (h >> 13)) * 1274126177
+	return float((h ^ (h >> 16)) & 0xFFFF) / 65535.0
+
+func _wall_accent(r: Rect2) -> Color:
+	if r.size == Vector2(80, 80):
+		return Color(1.0, 0.7, 0.2, 0.45)      # crates — amber
+	if r.size == Vector2(160, 160):
+		return Color(0.45, 0.95, 1.0, 0.55)    # center pillar — cyan
+	return Color(0.62, 0.50, 1.0, 0.30)        # walls — violet
+
 func _draw() -> void:
+	# Out-of-bounds apron + floor base.
+	draw_rect(ARENA.grow(80), Color(0.02, 0.02, 0.04))
 	draw_rect(ARENA, FLOOR_COLOR)
+	# Tiles: checker + deterministic per-tile brightness variation.
+	var ts := 100
+	for iy in range(int(ARENA.size.y) / ts):
+		for ix in range(int(ARENA.size.x) / ts):
+			var a := 0.05 * _hash01(ix, iy) + (0.045 if (ix + iy) % 2 == 0 else 0.0)
+			if a > 0.004:
+				draw_rect(Rect2(ix * ts, iy * ts, ts, ts), Color(0.50, 0.55, 0.90, a))
+	# Per-room neon tint zones with a thin trim.
+	for z in ZONES:
+		var zr: Rect2 = z[0]
+		var zc: Color = z[1]
+		draw_rect(zr, zc)
+		draw_rect(zr, Color(zc.r, zc.g, zc.b, 0.22), false, 2.0)
+	# Grid.
 	var x := ARENA.position.x
 	while x <= ARENA.end.x:
 		draw_line(Vector2(x, ARENA.position.y), Vector2(x, ARENA.end.y), GRID_COLOR, 1.0)
@@ -138,9 +196,42 @@ func _draw() -> void:
 	while y <= ARENA.end.y:
 		draw_line(Vector2(ARENA.position.x, y), Vector2(ARENA.end.x, y), GRID_COLOR, 1.0)
 		y += 100.0
+	# Deterministic scuff marks for grime.
+	for i in 70:
+		var hx := _hash01(i, 7)
+		var hy := _hash01(i, 13)
+		var ha := _hash01(i, 29)
+		var p := ARENA.position + Vector2(hx * ARENA.size.x, hy * ARENA.size.y)
+		var v := Vector2.from_angle(ha * TAU)
+		draw_line(p - v * (6.0 + ha * 14.0), p + v * (6.0 + hx * 14.0),
+				Color(0, 0, 0, 0.10 + hy * 0.08), 2.0)
+	# Floor markings: ring around the center pillar, pads at spawn points.
+	draw_arc(Vector2(1200, 800), 150.0, 0, TAU, 64, Color(0.45, 0.95, 1.0, 0.10), 3.0)
+	for s in SPAWNS:
+		draw_arc(s, 24.0, 0, TAU, 24, Color(0.45, 0.95, 1.0, 0.14), 2.0)
+		draw_line(s + Vector2(-10, 0), s + Vector2(10, 0), Color(0.45, 0.95, 1.0, 0.12), 2.0)
+		draw_line(s + Vector2(0, -10), s + Vector2(0, 10), Color(0.45, 0.95, 1.0, 0.12), 2.0)
+	# Wall drop shadows (fake height), then wall bodies.
+	for r in WALLS:
+		draw_rect(Rect2(r.position + Vector2(6, 9), r.size), Color(0, 0, 0, 0.38))
 	for r in WALLS:
 		draw_rect(r, WALL_COLOR)
-		draw_rect(r, WALL_EDGE, false, 2.0)
+		draw_rect(r.grow(-5), WALL_COLOR.lightened(0.07))
+		# Top-edge highlight / bottom-edge shade for fake depth.
+		draw_line(r.position + Vector2(1, 1), r.position + Vector2(r.size.x - 1, 1), WALL_EDGE, 2.5)
+		draw_line(r.position + Vector2(1, 1), r.position + Vector2(1, r.size.y - 1),
+				Color(WALL_EDGE.r, WALL_EDGE.g, WALL_EDGE.b, 0.4), 2.0)
+		draw_line(r.position + Vector2(1, r.size.y - 1), r.position + r.size - Vector2(1, 1),
+				Color(0, 0, 0, 0.45), 2.5)
+		draw_line(r.position + Vector2(r.size.x - 1, 1), r.position + r.size - Vector2(1, 1),
+				Color(0, 0, 0, 0.35), 2.0)
+		# Colored accent trim.
+		draw_rect(r.grow(-3), _wall_accent(r), false, 1.5)
+		# Crates get a cross-brace so they read as crates.
+		if r.size == Vector2(80, 80):
+			draw_line(r.position + Vector2(6, 6), r.end - Vector2(6, 6), Color(0, 0, 0, 0.30), 3.0)
+			draw_line(Vector2(r.end.x - 6, r.position.y + 6),
+					Vector2(r.position.x + 6, r.end.y - 6), Color(0, 0, 0, 0.30), 3.0)
 
 func _place_pickups() -> void:
 	var i := 0
@@ -171,6 +262,8 @@ func spawn_bullet(pos: Vector2, angle: float, wid: String, shooter, group: Strin
 	b.shooter_rid = shooter.get_rid()
 	b.shooter_peer = shooter.peer_id
 	b.source_group = group
+	var wc: Color = data.color
+	b.color = wc.lerp(Color(1.0, 0.95, 0.75), 0.6)  # hot tracer tinted per weapon
 	bullets.add_child(b)
 
 # ---------------------------------------------------------------- players
@@ -372,7 +465,7 @@ func _reset_match() -> void:
 # ---------------------------------------------------------------- helpers
 
 class Gore extends Node2D:
-	## Persistent blood splats + sprawled stick corpses, Hotline Miami style.
+	## Persistent blood splats + sprawled stick corpses over dark pools.
 	var splats: Array = []
 	var corpses: Array = []
 
@@ -385,6 +478,20 @@ class Gore extends Node2D:
 			splats.pop_front()
 		queue_redraw()
 
+	## Directional spray: droplets fan out along the hit direction, shrinking
+	## with distance, plus a couple of trailing drips. Purely cosmetic.
+	func add_spray(pos: Vector2, dir: Vector2) -> void:
+		var n := dir.normalized() if dir.length() > 0.01 else Vector2.from_angle(randf() * TAU)
+		add_splat(pos, randf_range(3.5, 6.0), Color(0.5, 0.06, 0.09, 0.85))
+		for i in 5:
+			var d := randf_range(8.0, 42.0)
+			var p := pos + n.rotated(randf_range(-0.45, 0.45)) * d
+			add_splat(p, maxf(1.2, randf_range(4.5, 7.5) - d * 0.12),
+					Color(randf_range(0.40, 0.55), 0.05, 0.09, randf_range(0.5, 0.85)))
+		for i in 2:
+			add_splat(pos + Vector2(randf_range(-10, 10), randf_range(-10, 10)),
+					randf_range(1.5, 2.5), Color(0.45, 0.05, 0.08, 0.8))
+
 	func add_corpse(pos: Vector2, col: Color) -> void:
 		corpses.append({pos = pos, col = col.darkened(0.35), rot = randf() * TAU})
 		if corpses.size() > 80:
@@ -395,26 +502,52 @@ class Gore extends Node2D:
 		queue_redraw()
 
 	func _draw() -> void:
+		# Dark blood pools under corpses first, then splats, then bodies.
+		for c in corpses:
+			draw_circle(c.pos + Vector2(3, 4), 17.0, Color(0.30, 0.03, 0.05, 0.55))
 		for s in splats:
 			draw_circle(s.pos, s.r, s.col)
 		for c in corpses:
 			var v: Vector2 = Vector2.from_angle(c.rot)
-			draw_line(c.pos - v * 6.0, c.pos + v * 8.0, c.col, 8.0)
-			draw_circle(c.pos + v * 14.0, 9.0, c.col)
+			var col: Color = c.col
+			draw_line(c.pos - v * 6.0, c.pos + v * 8.0, col, 8.0)
+			draw_circle(c.pos + v * 14.0, 9.0, col)
+			draw_circle(c.pos + v * 14.0, 9.0, col.darkened(0.35), false, 1.5)
 			for i in 4:
 				var limb: Vector2 = Vector2.from_angle(c.rot + 2.0 + i * 1.35) * 16.0
-				draw_line(c.pos, c.pos + limb, c.col, 4.0)
+				draw_line(c.pos, c.pos + limb, col, 4.0)
+				draw_circle(c.pos + limb, 2.6, col.darkened(0.2))
 
 class Crosshair extends Node2D:
+	## Dynamic crosshair: expands with movement and when firing.
+	var expand := 0.0
+	var game
+
 	func _ready() -> void:
 		z_index = 100
 
-	func _process(_delta: float) -> void:
+	func _process(delta: float) -> void:
 		position = get_global_mouse_position()
+		if game == null:
+			game = get_tree().get_first_node_in_group("game")
+		var target := 0.0
+		if game != null:
+			var p = game.local_player()
+			if p != null and p.alive:
+				if p.flash > 0.0:
+					expand = maxf(expand, 7.0)
+				target = clampf(p.velocity.length() / 270.0 * 2.5, 0.0, 3.0)
+		expand = maxf(target, expand - delta * 34.0)
+		visible = Input.mouse_mode == Input.MOUSE_MODE_HIDDEN
+		queue_redraw()
 
 	func _draw() -> void:
-		var c := Color(1, 1, 1, 0.9)
-		draw_arc(Vector2.ZERO, 7.0, 0, TAU, 24, c, 1.5)
+		var col := Color(0.55, 1.0, 1.0, 0.95)
+		var sh := Color(0, 0, 0, 0.55)
+		var gap := 5.0 + expand
 		for i in 4:
 			var v := Vector2.RIGHT.rotated(i * TAU / 4.0)
-			draw_line(v * 4.0, v * 10.0, c, 1.5)
+			draw_line(v * gap + Vector2(1, 1), v * (gap + 7.0) + Vector2(1, 1), sh, 3.0)
+			draw_line(v * gap, v * (gap + 7.0), col, 1.6)
+		draw_circle(Vector2(1, 1), 1.6, sh)
+		draw_circle(Vector2.ZERO, 1.4, col)

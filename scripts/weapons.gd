@@ -16,13 +16,13 @@ const DATA := {
 		name = "USP-S", damage = 20, interval = 0.18, auto = false,
 		speed = 1150.0, spread = 1.8, mag = 12, reserve = 72, reload = 1.1,
 		pellets = 1, length = 15.0, recoil = 2.0, reach = 380.0,
-		color = Color(0.55, 0.55, 0.62),
+		color = Color(0.66, 0.68, 0.76),
 	},
 	"mp5": {
 		name = "MP5-SD", damage = 12, interval = 0.075, auto = true,
 		speed = 1000.0, spread = 3.5, mag = 30, reserve = 150, reload = 1.4,
 		pellets = 1, length = 18.0, recoil = 1.2, reach = 300.0,
-		color = Color(0.35, 0.35, 0.42),
+		color = Color(0.52, 0.55, 0.66),
 	},
 	"m4a4": {
 		name = "M4A4", damage = 22, interval = 0.09, auto = true,

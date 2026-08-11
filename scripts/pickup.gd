@@ -52,24 +52,53 @@ func _respawn() -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func net_set_active(v: bool) -> void:
+	if v != active:
+		# Cosmetic ring on take / respawn (runs on every peer via this RPC).
+		var g = get_tree().get_first_node_in_group("game")
+		if g:
+			if v:
+				g.fx.ring(global_position, 20.0, Color(0.5, 1.0, 0.7, 0.5))
+			else:
+				g.fx.ring(global_position, 30.0, Color(1.0, 0.4, 0.7, 0.6))
 	active = v
 
 func _draw() -> void:
 	if not active:
 		return
-	var o := Vector2(0, sin(t * 3.0) * 2.0)
+	var o := Vector2(0, sin(t * 3.0) * 2.5)  # hover bob
 	var font := ThemeDB.fallback_font
+	# Ground shadow (squashed circle) under the floating item.
+	draw_set_transform(Vector2(0, 12), 0.0, Vector2(1.0, 0.4))
+	draw_circle(Vector2.ZERO, 11.0, Color(0, 0, 0, 0.30))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if kind == "medkit":
-		draw_rect(Rect2(o + Vector2(-11, -9), Vector2(22, 18)), Color(0.9, 0.92, 0.95))
+		# Soft red glow + white kit with a cross, pulsing ring.
+		for i in 3:
+			draw_circle(o, 12.0 + i * 5.0, Color(1.0, 0.25, 0.3, 0.05))
+		var pr := fposmod(t, 1.8) / 1.8
+		draw_arc(o, 13.0 + pr * 12.0, 0, TAU, 20,
+				Color(1.0, 0.35, 0.4, 0.35 * (1.0 - pr)), 2.0)
+		draw_rect(Rect2(o + Vector2(-12, -10), Vector2(24, 20)), Color(0.06, 0.06, 0.09))
+		draw_rect(Rect2(o + Vector2(-11, -9), Vector2(22, 18)), Color(0.92, 0.94, 0.97))
 		draw_rect(Rect2(o + Vector2(-3, -6), Vector2(6, 12)), Color(0.85, 0.15, 0.2))
 		draw_rect(Rect2(o + Vector2(-6, -3), Vector2(12, 6)), Color(0.85, 0.15, 0.2))
 	else:
 		var data: Dictionary = Weapons.DATA[weapon_id]
-		var pulse: float = 0.25 + 0.1 * sin(t * 2.0)
-		draw_arc(o, 16.0, 0, TAU, 24, Color(1, 1, 1, pulse), 2.0)
-		var half: float = data.length * 0.6
-		draw_line(o + Vector2(-half, 0), o + Vector2(half, 0), Color(0.08, 0.08, 0.1), 5.0)
-		draw_line(o + Vector2(-half, 0), o + Vector2(half, 0), data.color, 3.0)
-		draw_line(o + Vector2(-half * 0.4, 0), o + Vector2(-half * 0.4 - 3, 8), Color(0.08, 0.08, 0.1), 3.0)
-		draw_string(font, o + Vector2(-40, 32), data.name,
-				HORIZONTAL_ALIGNMENT_CENTER, 80, 11, Color(1, 1, 1, 0.7))
+		var gc: Color = data.color
+		# Soft glow in the weapon's tint.
+		for i in 3:
+			draw_circle(o, 10.0 + i * 5.0, Color(gc.r, gc.g, gc.b, 0.05))
+		# Rotating orbit arcs.
+		var aa := t * 1.2
+		draw_arc(o, 17.0, aa, aa + PI * 0.6, 14, Color(1, 1, 1, 0.45), 1.5)
+		draw_arc(o, 17.0, aa + PI, aa + PI * 1.6, 14, Color(1, 1, 1, 0.45), 1.5)
+		# Expanding pulse ring.
+		var pr2 := fposmod(t, 1.6) / 1.6
+		draw_arc(o, 12.0 + pr2 * 14.0, 0, TAU, 20,
+				Color(gc.r, gc.g, gc.b, 0.35 * (1.0 - pr2)), 2.0)
+		# The gun itself, gently swaying, with its real silhouette details.
+		var v := Vector2.RIGHT.rotated(sin(t * 0.9) * 0.15)
+		var wlen: float = data.length * 1.1
+		StickRender.draw_gun(self, o - v * wlen * 0.55, v, weapon_id, wlen)
+		draw_string(font, o + Vector2(-40, 34), data.name,
+				HORIZONTAL_ALIGNMENT_CENTER, 80, 11, Color(0.85, 0.95, 1.0, 0.8))
