@@ -1,1 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" rx="24" fill="#3d8fd1"/><path d="M64 24 L100 44 v40 L64 104 L28 84 V44 Z" fill="none" stroke="#fff" stroke-width="8" stroke-linejoin="round"/><circle cx="64" cy="64" r="12" fill="#fff"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="20" fill="#0D1117"/>
+  <g stroke="#1B2430" stroke-width="1.5">
+    <path d="M32 3 V125 M64 3 V125 M96 3 V125 M3 32 H125 M3 64 H125 M3 96 H125"/>
+  </g>
+  <!-- incoming-wave ring fragment behind the player marker -->
+  <path d="M35.1 98.5 A45 45 0 0 1 35.1 29.5" fill="none" stroke="#FF3B5C" stroke-width="5" stroke-linecap="round" opacity="0.9"/>
+  <!-- player chevron firing toward upper-right -->
+  <g transform="rotate(-45 64 64)">
+    <path d="M88 64 L48 42 L58 64 L48 86 Z" fill="#4DF3FF"/>
+    <path d="M76 64 L55 52.5 L60.2 64 L55 75.5 Z" fill="#E8FDFF"/>
+  </g>
+  <!-- bullet dot with a short fading trail -->
+  <circle cx="88" cy="40" r="3" fill="#FF9F1C" opacity="0.55"/>
+  <circle cx="98" cy="30" r="6" fill="#FFE94A"/>
+</svg>
